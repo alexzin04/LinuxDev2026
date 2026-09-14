@@ -1,149 +1,251 @@
+#include <curses.h>
 #include <errno.h>
-#include <ncurses.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static void free_lines(char **lines, size_t count)
-{
-    size_t i;
+struct Offsets {
+  long *data;
+  int count;
+  int size;
+};
 
-    for (i = 0; i < count; i++) {
-        free(lines[i]);
-    }
-    free(lines);
+void free_lines(char **lines, int count) {
+  int i;
+
+  for (i = 0; i < count; i++) {
+    free(lines[i]);
+  }
 }
 
-static int read_file(const char *name, char ***lines, size_t *count)
-{
-    FILE *file;
-    char **data = NULL;
-    char buffer[4096];
-    size_t used = 0;
-    size_t size = 0;
+char *read_line(FILE *file) {
+  char buffer[4096];
+  size_t len;
 
-    file = fopen(name, "r");
-    if (file == NULL) {
-        return -1;
+  if (fgets(buffer, sizeof(buffer), file) == NULL) {
+    return NULL;
+  }
+
+  len = strlen(buffer);
+  if (len > 0 && buffer[len - 1] == '\n') {
+    buffer[len - 1] = '\0';
+  }
+
+  return strdup(buffer);
+}
+
+int has_next_char(FILE *file) {
+  int ch;
+  long pos = ftell(file);
+
+  if (pos < 0) {
+    return 0;
+  }
+
+  ch = fgetc(file);
+  if (ch == EOF) {
+    return 0;
+  }
+
+  if (fseek(file, pos, SEEK_SET) != 0) {
+    return 0;
+  }
+
+  return 1;
+}
+
+int add_offset(struct Offsets *offsets, long value) {
+  long *tmp;
+  int new_size;
+
+  if (offsets->count < offsets->size) {
+    offsets->data[offsets->count++] = value;
+    return 0;
+  }
+
+  new_size = offsets->size == 0 ? 32 : offsets->size * 2;
+  tmp = realloc(offsets->data, (size_t)new_size * sizeof(*offsets->data));
+  if (tmp == NULL) {
+    return -1;
+  }
+
+  offsets->data = tmp;
+  offsets->size = new_size;
+  offsets->data[offsets->count++] = value;
+  return 0;
+}
+
+int ensure_offset(FILE *file, struct Offsets *offsets, int line) {
+  char buffer[4096];
+
+  while (offsets->count <= line) {
+    if (fseek(file, offsets->data[offsets->count - 1], SEEK_SET) != 0) {
+      return -1;
     }
-
-    while (fgets(buffer, sizeof(buffer), file) != NULL) {
-        char *line;
-        size_t len = strlen(buffer);
-
-        if (len > 0 && buffer[len - 1] == '\n') {
-            buffer[len - 1] = '\0';
-        }
-
-        if (used == size) {
-            char **tmp;
-            size_t new_size = size == 0 ? 16 : size * 2;
-
-            tmp = realloc(data, new_size * sizeof(*data));
-            if (tmp == NULL) {
-                free_lines(data, used);
-                fclose(file);
-                return -1;
-            }
-            data = tmp;
-            size = new_size;
-        }
-
-        line = strdup(buffer);
-        if (line == NULL) {
-            free_lines(data, used);
-            fclose(file);
-            return -1;
-        }
-        data[used++] = line;
+    if (fgets(buffer, sizeof(buffer), file) == NULL) {
+      return 0;
     }
-
-    if (ferror(file)) {
-        free_lines(data, used);
-        fclose(file);
-        return -1;
+    if (!has_next_char(file)) {
+      return 0;
     }
+    if (add_offset(offsets, ftell(file)) != 0) {
+      return -1;
+    }
+  }
 
+  return 1;
+}
+
+int load_page(FILE *file, char **lines, int old_count, int max_lines,
+              struct Offsets *offsets, int first_line) {
+  int count = 0;
+
+  if (ensure_offset(file, offsets, first_line) != 1) {
+    return old_count;
+  }
+
+  free_lines(lines, old_count);
+  if (fseek(file, offsets->data[first_line], SEEK_SET) != 0) {
+    return 0;
+  }
+
+  while (count < max_lines) {
+    lines[count] = read_line(file);
+    if (lines[count] == NULL) {
+      break;
+    }
+    if (offsets->count == first_line + count + 1 && has_next_char(file)) {
+      if (add_offset(offsets, ftell(file)) != 0) {
+        free_lines(lines, count + 1);
+        return 0;
+      }
+    }
+    count++;
+  }
+
+  return count;
+}
+
+void draw_page(WINDOW *win, char **lines, int count, const char *name) {
+  int width;
+  int row;
+
+  width = getmaxx(win);
+  werase(win);
+  box(win, 0, 0);
+  mvwprintw(win, 0, 2, " %s ", name);
+
+  for (row = 0; row < count; row++) {
+    mvwprintw(win, row + 1, 1, "%.*s", width - 2, lines[row]);
+  }
+
+  wrefresh(win);
+}
+
+int move_to_line(FILE *file, char **lines, int count, int max_lines,
+                 struct Offsets *offsets, int *first_line, int new_line) {
+  int new_count;
+
+  if (new_line < 0) {
+    new_line = 0;
+  }
+
+  new_count = load_page(file, lines, count, max_lines, offsets, new_line);
+  if (new_count == 0 && new_line != 0) {
+    return count;
+  }
+
+  *first_line = new_line;
+  return new_count;
+}
+
+int main(int argc, char **argv) {
+  FILE *file;
+  char **lines;
+  int count = 0;
+  int key;
+  int height;
+  int width;
+  int max_lines;
+  int first_line = 0;
+  WINDOW *win;
+  struct Offsets offsets = {NULL, 0, 0};
+
+  if (argc != 2) {
+    fprintf(stderr, "Usage: %s FILE\n", argv[0]);
+    return 1;
+  }
+
+  file = fopen(argv[1], "r");
+  if (file == NULL) {
+    fprintf(stderr, "%s: %s\n", argv[1], strerror(errno));
+    return 1;
+  }
+
+  if (add_offset(&offsets, 0) != 0) {
     fclose(file);
-    *lines = data;
-    *count = used;
-    return 0;
-}
+    return 1;
+  }
 
-static void draw_page(WINDOW *win, char **lines, size_t count,
-                      size_t first, const char *name)
-{
-    int height;
-    int width;
-    int row;
+  initscr();
+  cbreak();
+  noecho();
 
-    getmaxyx(win, height, width);
-    werase(win);
-    box(win, 0, 0);
-    mvwprintw(win, 0, 2, " %s ", name);
-
-    for (row = 1; row < height - 1; row++) {
-        size_t index = first + (size_t)(row - 1);
-
-        if (index >= count) {
-            break;
-        }
-        mvwprintw(win, row, 1, "%.*s", width - 2, lines[index]);
-    }
-
-    wrefresh(win);
-}
-
-int main(int argc, char **argv)
-{
-    char **lines = NULL;
-    size_t count = 0;
-    size_t first = 0;
-    int key;
-    int height;
-    int width;
-    WINDOW *win;
-
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s FILE\n", argv[0]);
-        return 1;
-    }
-
-    if (read_file(argv[1], &lines, &count) != 0) {
-        fprintf(stderr, "%s: %s\n", argv[1], strerror(errno));
-        return 1;
-    }
-
-    initscr();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-
-    getmaxyx(stdscr, height, width);
-    win = newwin(height, width, 0, 0);
-    if (win == NULL) {
-        endwin();
-        free_lines(lines, count);
-        return 1;
-    }
-
-    draw_page(win, lines, count, first, argv[1]);
-
-    while ((key = getch()) != 27) {
-        int page_height;
-        int page_width;
-
-        getmaxyx(win, page_height, page_width);
-        (void)page_width;
-
-        if (key == ' ' && first + (size_t)(page_height - 2) < count) {
-            first++;
-            draw_page(win, lines, count, first, argv[1]);
-        }
-    }
-
-    delwin(win);
+  getmaxyx(stdscr, height, width);
+  max_lines = height - 2;
+  if (max_lines < 1) {
     endwin();
-    free_lines(lines, count);
-    return 0;
+    free(offsets.data);
+    fclose(file);
+    return 1;
+  }
+
+  lines = calloc((size_t)max_lines, sizeof(*lines));
+  if (lines == NULL) {
+    endwin();
+    free(offsets.data);
+    fclose(file);
+    return 1;
+  }
+
+  win = newwin(height, width, 0, 0);
+  if (win == NULL) {
+    endwin();
+    free(lines);
+    free(offsets.data);
+    fclose(file);
+    return 1;
+  }
+  keypad(win, TRUE);
+
+  count = load_page(file, lines, count, max_lines, &offsets, first_line);
+  draw_page(win, lines, count, argv[1]);
+
+  while ((key = wgetch(win)) != 27) {
+    int new_line = first_line;
+
+    if (key == ' ' || key == KEY_DOWN) {
+      new_line = first_line + 1;
+    } else if (key == KEY_UP) {
+      new_line = first_line - 1;
+    } else if (key == KEY_NPAGE) {
+      new_line = first_line + max_lines;
+    } else if (key == KEY_PPAGE) {
+      new_line = first_line - max_lines;
+    } else {
+      continue;
+    }
+
+    count = move_to_line(file, lines, count, max_lines, &offsets, &first_line,
+                         new_line);
+    draw_page(win, lines, count, argv[1]);
+  }
+
+  delwin(win);
+  endwin();
+  free_lines(lines, count);
+  free(lines);
+  free(offsets.data);
+  fclose(file);
+  return 0;
 }
