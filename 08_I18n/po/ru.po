@@ -1,0 +1,55 @@
+# Russian translation of guess-number.
+# Copyright (C) 2026 Alex Student
+# This file is distributed under the same license as guess-number.
+# Alex Student <alex@example.org>, 2026.
+msgid ""
+msgstr ""
+"Project-Id-Version: guess-number 1.0\n"
+"Report-Msgid-Bugs-To: alex@example.org\n"
+"POT-Creation-Date: 2026-11-09 13:59+0300\n"
+"PO-Revision-Date: 2026-11-09 00:00+0300\n"
+"Last-Translator: Alex Student <alex@example.org>\n"
+"Language-Team: Russian\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
+"n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#: src/guess-number.c:22
+msgid "Think of a number from 1 to 100."
+msgstr "Загадайте число от 1 до 100."
+
+#: src/guess-number.c:25
+#, c-format
+msgid "Is your number greater than %d? (%s/%s): "
+msgstr "Ваше число больше %d? (%s/%s): "
+
+#: src/guess-number.c:26 src/guess-number.c:38 src/guess-number.c:39
+#: src/guess-number.c:46
+msgid "Yes"
+msgstr "Да"
+
+#: src/guess-number.c:26 src/guess-number.c:41 src/guess-number.c:42
+#: src/guess-number.c:46
+msgid "No"
+msgstr "Нет"
+
+#: src/guess-number.c:30
+msgid "Error: cannot read standard input.\n"
+msgstr "Ошибка: не удалось прочитать стандартный ввод.\n"
+
+#: src/guess-number.c:31
+msgid "Error: standard input is closed.\n"
+msgstr "Ошибка: стандартный ввод закрыт.\n"
+
+#: src/guess-number.c:45
+#, c-format
+msgid "Error: enter exactly '%s' or '%s'.\n"
+msgstr "Ошибка: введите ровно «%s» или «%s».\n"
+
+#: src/guess-number.c:48
+#, c-format
+msgid "Your number is %d!\n"
+msgstr "Ваше число — %d!\n"
